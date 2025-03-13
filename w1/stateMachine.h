@@ -37,5 +37,7 @@ public:
 
   int addState(State *st);
   void addTransition(StateTransition *trans, int from, int to);
+
+  void switchState(int stateIdx);
 };
 

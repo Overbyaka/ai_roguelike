@@ -244,7 +244,39 @@ struct PatchUp : public BehNode
   }
 };
 
+struct AttackMagic : public BehNode
+{
+    int radius = 2;
+    AttackMagic(int radius) : radius(radius) {}
 
+    BehResult update(flecs::world& ecs, flecs::entity entity, Blackboard&) override
+    {
+        BehResult res = BEH_FAIL;
+        static auto enemiesQuery = ecs.query<const Position, const Team>();
+
+        flecs::entity attack_target = flecs::entity::null();
+
+        entity.insert([&](Action& a, Hitpoints& hp, Position& pos, const Team& t, MagicAttack& magic)
+            {
+                enemiesQuery.each([&](flecs::entity enemy, const Position& epos, const Team& et)
+                    {
+                        if (t.team == et.team)
+                            return;
+
+                        if (std::abs(pos.x - epos.x) + std::abs(pos.y - epos.y) == radius)
+                        {
+                            attack_target = enemy;
+                        }
+                    });
+                if (attack_target.is_valid()) {
+                    res = BEH_SUCCESS;
+                    a.action = EA_ATTACK_MAGIC;
+                    magic.target = attack_target;
+                }
+            });
+        return res;
+    }
+};
 
 BehNode *sequence(const std::vector<BehNode*> &nodes)
 {
@@ -299,4 +331,7 @@ BehNode *patch_up(float thres)
   return new PatchUp(thres);
 }
 
-
+BehNode* try_attack_magic(int radius)
+{
+    return new AttackMagic(radius);
+}

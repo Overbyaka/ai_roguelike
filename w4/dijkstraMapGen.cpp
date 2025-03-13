@@ -13,7 +13,7 @@ static void query_dungeon_data(flecs::world &ecs, Callable c)
 template<typename Callable>
 static void query_characters_positions(flecs::world &ecs, Callable c)
 {
-  static auto characterPositionQuery = ecs.query<const Position, const Team>();
+  static auto characterPositionQuery = ecs.query<const Position, const Team, const Hitpoints>();
 
   characterPositionQuery.each(c);
 }
@@ -71,13 +71,70 @@ void dmaps::gen_player_approach_map(flecs::world &ecs, std::vector<float> &map)
   query_dungeon_data(ecs, [&](const DungeonData &dd)
   {
     init_tiles(map, dd);
-    query_characters_positions(ecs, [&](const Position &pos, const Team &t)
+    query_characters_positions(ecs, [&](const Position& pos, const Team& t, const Hitpoints&)
     {
       if (t.team == 0) // player team hardcode
         map[pos.y * dd.width + pos.x] = 0.f;
     });
     process_dmap(map, dd);
   });
+}
+
+void dmaps::gen_melee_attack_map(flecs::world& ecs, const Team& team, std::vector<float>& map)
+{
+    query_dungeon_data(ecs, [&](const DungeonData& dd)
+        {
+            init_tiles(map, dd);
+            query_characters_positions(ecs, [&](const Position& pos, const Team& t, const Hitpoints&)
+                {
+                    if (t.team != team.team)
+                        map[pos.y * dd.width + pos.x] = 0.f;
+                });
+            process_dmap(map, dd);
+        });
+}
+
+void dmaps::gen_wizard_attack_map(flecs::world& ecs, const Team& team, std::vector<float>& map)
+{
+    query_dungeon_data(ecs, [&](const DungeonData& dd)
+        {
+            init_tiles(map, dd);
+            query_characters_positions(ecs, [&](const Position& pos, const Team& t, const Hitpoints&)
+                {
+                    if (t.team != team.team) {
+                        int radius = 4;
+                        for (int i = -radius; i <= radius; ++i) {
+                            int j = radius - std::abs(i);
+                            if (dungeon::is_tile_walkable(ecs, { pos.x + j, pos.y - i })) {
+                                map[(pos.y - i) * dd.width + (pos.x + j)] = 0.f;
+                            }
+                            if (dungeon::is_tile_walkable(ecs, { pos.x - j, pos.y - i })) {
+                                map[(pos.y - i) * dd.width + (pos.x - j)] = 0.f;
+                            }
+                        }
+                    }
+                });
+            process_dmap(map, dd);
+        });
+}
+
+void dmaps::gen_explore_map(flecs::world& ecs, std::vector<float>& map)
+{
+    query_dungeon_data(ecs, [&](const DungeonData& dd)
+        {
+            init_tiles(map, dd);
+            static auto visibilityQuery = ecs.query<const DungeonVisibility>();
+            visibilityQuery.each([&](const DungeonVisibility& dv) {
+                for (int i = 0; i < dv.height; ++i) {
+                    for (int j = 0; j < dv.width; ++j) {
+                        if (!dv.tiles[i * dv.width + j]) {
+                            map[i * dv.width + j] = 0.f;
+                        }
+                    }
+                }
+                });
+            process_dmap(map, dd);
+        });
 }
 
 void dmaps::gen_player_flee_map(flecs::world &ecs, std::vector<float> &map)

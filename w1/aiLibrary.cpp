@@ -2,6 +2,7 @@
 #include <flecs.h>
 #include "ecsTypes.h"
 #include "raylib.h"
+#include "log.h"
 #include <cfloat>
 #include <cmath>
 
@@ -10,17 +11,33 @@ class AttackEnemyState : public State
 public:
   void enter() const override {}
   void exit() const override {}
-  void act(float/* dt*/, flecs::world &/*ecs*/, flecs::entity /*entity*/) const override {}
+  void act(float/* dt*/, flecs::world &/*ecs*/, flecs::entity entity) const override
+  {
+    entity.insert([&](Action &a)
+    {
+      a.action = EA_ATTACK;
+    });
+  }
 };
 
-template<typename T>
-T sqr(T a){ return a*a; }
+class SMState : public State
+{
+  StateMachine *sm; // we own it
+public:
+  SMState(StateMachine *sm) : sm(sm) {}
 
-template<typename T, typename U>
-static float dist_sq(const T &lhs, const U &rhs) { return float(sqr(lhs.x - rhs.x) + sqr(lhs.y - rhs.y)); }
+  ~SMState() { delete sm; }
 
-template<typename T, typename U>
-static float dist(const T &lhs, const U &rhs) { return sqrtf(dist_sq(lhs, rhs)); }
+  void enter() const override
+  {
+    sm->switchState(0);
+  }
+  void exit() const override {}
+  void act(float dt, flecs::world &ecs, flecs::entity entity) const override
+  {
+    sm->act(dt, ecs, entity);
+  }
+};
 
 template<typename T, typename U>
 static int move_towards(const T &from, const U &to)
@@ -81,6 +98,39 @@ public:
   }
 };
 
+class MoveToPlayerState : public State
+{
+public:
+  void enter() const override {}
+  void exit() const override {}
+  void act(float /* dt */, flecs::world &ecs, flecs::entity entity) const override
+  {
+    static auto playerQuery = ecs.query<const IsPlayer, const Position>();
+    entity.insert([&](Action &a, const Position &pos)
+    {
+      playerQuery.each([&](const IsPlayer, const Position& player_pos)
+      {
+        a.action = move_towards(pos, player_pos);
+      });
+    });
+  }
+};
+
+class HealingState : public State
+{
+public:
+  void enter() const override {}
+  void exit() const override {}
+  void act(float /* dt */, flecs::world &ecs, flecs::entity entity) const override
+  {
+    debug("healing...");
+    entity.insert([](Action &a)
+    {
+      a.action = EA_HEAL;
+    });
+  }
+};
+
 class FleeFromEnemyState : public State
 {
 public:
@@ -92,6 +142,19 @@ public:
     on_closest_enemy_pos(ecs, entity, [&](Action &a, const Position &pos, const Position &enemy_pos)
     {
       a.action = inverse_move(move_towards(pos, enemy_pos));
+    });
+  }
+};
+
+class SpawnSlimeState : public State
+{
+public:
+  void enter() const override {}
+  void exit() const override {}
+  void act(float/* dt*/, flecs::world &ecs, flecs::entity entity) const override
+  {
+    entity.insert([](Action &a){
+      a.action = EA_SPAWN;
     });
   }
 };
@@ -118,12 +181,100 @@ public:
   }
 };
 
+class GoToState : public State
+{
+  int x, y;
+public:
+  GoToState(int x, int y) : x(x), y(y) {}
+  void enter() const override {}
+  void exit() const override {}
+  void act(float dt, flecs::world &ecs, flecs::entity entity) const override
+  {
+    entity.insert([&](const Position &pos, Action &a)
+    {
+      a.action = move_towards(pos, Position{x, y});
+    });
+  }
+};
+
+class EatState : public State
+{
+public:
+  void enter() const override {}
+  void exit() const override {}
+  void act(float dt, flecs::world &ecs, flecs::entity entity) const override
+  {
+    if (!entity.has<Hunger>())
+      return;
+
+    entity.insert([](Hunger &hunger)
+    {
+      debug("eating...");
+      hunger.current = 0;
+    });
+  }
+};
+
+class SleepState : public State
+{
+public:
+  void enter() const override {}
+  void exit() const override {}
+  void act(float dt, flecs::world &ecs, flecs::entity entity) const override
+  {
+    if (!entity.has<Fatigue>())
+      return;
+
+    entity.insert([](Fatigue &fatigue)
+    {
+      debug("sleeping...");
+      fatigue.current = 0;
+    });
+  }
+};
+
 class NopState : public State
 {
 public:
   void enter() const override {}
   void exit() const override {}
   void act(float/* dt*/, flecs::world &ecs, flecs::entity entity) const override {}
+};
+
+class DistToPosTransition : public StateTransition
+{
+  float triggerDist;
+  int x, y;
+public:
+  DistToPosTransition(float triggerDist, int x, int y)
+    : triggerDist(triggerDist), x(x), y(y) {}
+  bool isAvailable(flecs::world &ecs, flecs::entity entity) const override
+  {
+    bool reached = false;
+    entity.get([&](const Position &pos)
+    {
+      float curDist = dist(Position{x, y}, pos);
+      reached |= curDist <= triggerDist;
+    });
+    return reached;
+  }
+};
+
+template <typename Component>
+class ComponentLessThanTransition : public StateTransition
+{
+  int threshold;
+public:
+  ComponentLessThanTransition(int threshold) : threshold(threshold) {}
+  bool isAvailable(flecs::world &ecs, flecs::entity entity) const override
+  {
+    bool reached = false;
+    entity.get([&](const Component &comp)
+    {
+      reached |= comp.current <= threshold;
+    });
+    return reached;
+  }
 };
 
 class EnemyAvailableTransition : public StateTransition
@@ -149,6 +300,32 @@ public:
   }
 };
 
+class AllyAvailableTransition : public StateTransition
+{
+  float triggerDist;
+public:
+  AllyAvailableTransition(float in_dist) : triggerDist(in_dist) {}
+  bool isAvailable(flecs::world &ecs, flecs::entity entity) const override
+  {
+    static auto alliesQuery = ecs.query<const Position, const Team>();
+    bool alliesFound = false;
+    entity.get([&](const Position &pos, const Team &t)
+    {
+      alliesQuery.each([&](flecs::entity ally, const Position &apos, const Team at)
+      {
+        if (ally == entity)
+          return;
+
+        if (t.team != at.team)
+          return;
+        float curDist = dist(apos, pos);
+        alliesFound |= curDist <= triggerDist;
+      });
+    });
+    return alliesFound;
+  }
+};
+
 class HitpointsLessThanTransition : public StateTransition
 {
   float threshold;
@@ -161,6 +338,25 @@ public:
     {
       hitpointsThresholdReached |= hp.hitpoints < threshold;
     });
+    return hitpointsThresholdReached;
+  }
+};
+
+class PlayerHitpointsLessThanTransition : public StateTransition
+{
+  float threshold;
+public:
+  PlayerHitpointsLessThanTransition(float in_thres) : threshold(in_thres) {}
+  bool isAvailable(flecs::world &ecs, flecs::entity entity) const override
+  {
+    bool hitpointsThresholdReached = false;
+
+    ecs.query<const IsPlayer, const Hitpoints>()
+      .each([&](const IsPlayer, const Hitpoints hp)
+    {
+      hitpointsThresholdReached |= hp.hitpoints < threshold;
+    });
+
     return hitpointsThresholdReached;
   }
 };
@@ -205,8 +401,42 @@ public:
   }
 };
 
+class AlwaysTransition : public StateTransition
+{
+public:
+  bool isAvailable(flecs::world &ecs, flecs::entity entity) const override
+  {
+    return true;
+  }
+};
+
+// state machines
+StateMachine *create_state_machine()
+{
+  return new StateMachine();
+}
 
 // states
+State *create_sm_state(StateMachine *sm)
+{
+  return new SMState(sm);
+}
+
+State *create_go_to_state(int x, int y)
+{
+  return new GoToState(x, y);
+}
+
+State *create_eat_state()
+{
+  return new EatState();
+}
+
+State *create_sleep_state()
+{
+  return new SleepState();
+}
+
 State *create_attack_enemy_state()
 {
   return new AttackEnemyState();
@@ -214,6 +444,16 @@ State *create_attack_enemy_state()
 State *create_move_to_enemy_state()
 {
   return new MoveToEnemyState();
+}
+
+State *create_move_to_player_state()
+{
+  return new MoveToPlayerState();
+}
+
+State *create_healing_state()
+{
+  return new HealingState();
 }
 
 State *create_flee_from_enemy_state()
@@ -232,10 +472,39 @@ State *create_nop_state()
   return new NopState();
 }
 
+State *create_spawn_slime_state()
+{
+  return new SpawnSlimeState();
+}
+
 // transitions
+StateTransition *create_hunger_more_than_transition(int threshold)
+{
+  return create_negate_transition(
+    new ComponentLessThanTransition<Hunger>(threshold)
+  );
+}
+
+StateTransition *create_fatigue_more_than_transition(int threshold)
+{
+  return create_negate_transition(
+    new ComponentLessThanTransition<Fatigue>(threshold)
+  );
+}
+
+StateTransition *create_dist_to_pos_transition(float dist, int x, int y)
+{
+  return new DistToPosTransition(dist, x, y);
+}
+
 StateTransition *create_enemy_available_transition(float dist)
 {
   return new EnemyAvailableTransition(dist);
+}
+
+StateTransition *create_ally_available_transition(float dist)
+{
+  return new AllyAvailableTransition(dist);
 }
 
 StateTransition *create_enemy_reachable_transition()
@@ -248,6 +517,11 @@ StateTransition *create_hitpoints_less_than_transition(float thres)
   return new HitpointsLessThanTransition(thres);
 }
 
+StateTransition *create_player_hitpoints_less_than_transition(float thres)
+{
+  return new PlayerHitpointsLessThanTransition(thres);
+}
+
 StateTransition *create_negate_transition(StateTransition *in)
 {
   return new NegateTransition(in);
@@ -257,3 +531,7 @@ StateTransition *create_and_transition(StateTransition *lhs, StateTransition *rh
   return new AndTransition(lhs, rhs);
 }
 
+StateTransition *create_always_transition()
+{
+  return new AlwaysTransition();
+}

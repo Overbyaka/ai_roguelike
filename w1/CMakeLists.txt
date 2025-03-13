@@ -11,7 +11,7 @@ SET(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 file(GLOB_RECURSE HW1_SOURCES1 . ./*.[ch]pp)
 file(GLOB_RECURSE HW1_SOURCES2 . ./*.[ch])
 
-add_executable(hw1 ${HW1_SOURCES1} ${HW1_SOURCES2})
+add_executable(hw1 ${HW1_SOURCES1} ${HW1_SOURCES2} "log.h")
 target_link_libraries(hw1 PUBLIC project_options project_warnings)
 target_link_libraries(hw1 PUBLIC raylib flecs_static)
 

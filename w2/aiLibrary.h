@@ -26,3 +26,13 @@ BehNode *find_enemy(flecs::entity entity, float dist, const char *bb_name);
 BehNode *flee(flecs::entity entity, const char *bb_name);
 BehNode *patrol(flecs::entity entity, float patrol_dist, const char *bb_name);
 
+BehNode* myNot(BehNode* node);
+BehNode* myXor(BehNode* nodeFirst, BehNode* nodeSecond);
+BehNode* repeatN(BehNode* nodeFirst, int32_t numRepeats);
+
+BehNode* findHealOrPowerup(flecs::entity entity, float in_dist, const char* bb_name);
+BehNode* moveToSpawnPosition(flecs::entity entity, const char* bb_name);
+BehNode* collectorSpawn();
+
+BehNode* find_next_waypoint(flecs::entity entity, flecs::entity startWaypoint, const char* bb_name);
+

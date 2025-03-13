@@ -61,6 +61,7 @@ enum Actions
   EA_MOVE_UP,
   EA_MOVE_END,
   EA_ATTACK = EA_MOVE_END,
+  EA_COLLECTOR_SPAWN,
   EA_NUM
 };
 
@@ -108,6 +109,17 @@ struct IsPlayer {};
 struct Team
 {
   int team = 0;
+};
+
+struct Collector
+{
+	int healsAndPowerupsCollected = 0;
+	float spawnRadius = 0.0f;
+};
+
+struct Waypoint
+{
+	flecs::entity nextWaypointEntity;
 };
 
 struct TextureSource {};

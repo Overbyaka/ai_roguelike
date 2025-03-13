@@ -27,6 +27,42 @@ static flecs::entity create_hive_follower(flecs::entity e)
   return e;
 }
 
+static flecs::entity create_blue_melee(flecs::entity e)
+{
+    e.set(DmapWeights{ {{"blue_melee_attack_map", {1.f, 1.f}}} })
+        .set(Team{ 1 })
+        .set(Color{ 0, 0, 255, 255 });
+    return e;
+}
+
+static flecs::entity create_red_melee(flecs::entity e)
+{
+    e.set(DmapWeights{ {{"red_melee_attack_map", {1.f, 1.f}}} })
+        .set(Team{ 2 })
+        .set(Color{ 255, 0, 0, 255 });
+    return e;
+}
+
+static void create_wizard_beh(flecs::entity e);
+
+static flecs::entity create_blue_wizard(flecs::entity e)
+{
+    e.set(DmapWeights{ {{"blue_wizard_attack_map", {1.f, 1.f}}} })
+        .set(Team{ 1 })
+        .set(Color{ 0, 0, 255, 255 });
+    create_wizard_beh(e);
+    return e;
+}
+
+static flecs::entity create_red_wizard(flecs::entity e)
+{
+    e.set(DmapWeights{ {{"red_wizard_attack_map", {1.f, 1.f}}} })
+        .set(Team{ 2 })
+        .set(Color{ 255, 0, 0, 255 });
+    create_wizard_beh(e);
+    return e;
+}
+
 static flecs::entity create_hive_monster(flecs::entity e)
 {
   e.set(DmapWeights{{{"hive_map", {1.f, 1.f}}, {"approach_map", {1.8, 0.8f}}}});
@@ -107,6 +143,27 @@ static void create_minotaur_beh(flecs::entity e)
   e.set(BehaviourTree{root});
 }
 
+static void create_wizard_beh(flecs::entity e)
+{
+    e.set(Blackboard{});
+    BehNode* root =
+        selector({
+         try_attack_magic(4)
+            });
+    e.set(BehaviourTree{ root });
+}
+
+static void reveal_visibility(flecs::world& ecs, const Position& pos, DungeonVisibility& dv) {
+    int radius = 2;
+    for (int i = -radius; i <= radius; ++i) {
+        for (int j = -radius; j <= radius; ++j) {
+            if (dungeon::is_tile_walkable(ecs, Position{ pos.x + j, pos.y + i })) {
+                dv.tiles[(pos.y + i) * dv.width + (pos.x + j)] = true;
+            }
+        }
+    }
+}
+
 static Position find_free_dungeon_tile(flecs::world &ecs)
 {
   static auto findMonstersQuery = ecs.query<const Position, const Hitpoints>();
@@ -126,9 +183,11 @@ static Position find_free_dungeon_tile(flecs::world &ecs)
   return {0, 0};
 }
 
-static flecs::entity create_monster(flecs::world &ecs, Color col, const char *texture_src)
+static flecs::entity create_monster(flecs::world& ecs, Color col, const char* texture_src, Position pos = { -1, -1 })
 {
-  Position pos = find_free_dungeon_tile(ecs);
+  if (pos == Position{ -1, -1 }) {
+    pos = find_free_dungeon_tile(ecs);
+  }
 
   flecs::entity textureSrc = ecs.entity(texture_src);
   return ecs.entity()
@@ -153,7 +212,7 @@ static void create_player(flecs::world &ecs, const char *texture_src)
   ecs.entity("player")
     .set(Position{pos.x, pos.y})
     .set(MovePos{pos.x, pos.y})
-    .set(Hitpoints{100.f})
+    .set(Hitpoints{500.f})
     //.set(Color{0xee, 0xee, 0xee, 0xff})
     .set(Action{EA_NOP})
     .add<IsPlayer>()
@@ -162,7 +221,43 @@ static void create_player(flecs::world &ecs, const char *texture_src)
     .set(NumActions{2, 0})
     .set(Color{255, 255, 255, 255})
     .add<TextureSource>(textureSrc)
-    .set(MeleeDamage{20.f});
+      .set(MeleeDamage{ 50.f });
+}
+
+static void create_blue_spawner(flecs::world& ecs)
+{
+    Position pos = { -1, -1 };
+    static auto dungeonDataQuery = ecs.query<const DungeonData>();
+    dungeonDataQuery.each([&](const DungeonData& dd)
+        {
+            do {
+                pos = find_free_dungeon_tile(ecs);
+            } while (pos.x > dd.width / 2);
+        });
+
+    ecs.entity()
+        .set(Position{ pos.x, pos.y })
+        .set(Color{ 0,0,255, 255 })
+        .set(Spawner{ 10, 0, 3 })
+        .set(Team{ 1 });
+}
+
+static void create_red_spawner(flecs::world& ecs)
+{
+    Position pos = { -1, -1 };
+    static auto dungeonDataQuery = ecs.query<const DungeonData>();
+    dungeonDataQuery.each([&](const DungeonData& dd)
+        {
+            do {
+                pos = find_free_dungeon_tile(ecs);
+            } while (pos.x < dd.width / 2);
+        });
+
+    ecs.entity()
+        .set(Position{ pos.x, pos.y })
+        .set(Color{ 255,0,0, 255 })
+        .set(Spawner{ 10, 0, 3 })
+        .set(Team{ 2 });
 }
 
 static void create_heal(flecs::world &ecs, int x, int y, float amount)
@@ -171,6 +266,15 @@ static void create_heal(flecs::world &ecs, int x, int y, float amount)
     .set(Position{x, y})
     .set(HealAmount{amount})
     .set(Color{0xff, 0x44, 0x44, 0xff});
+}
+
+static void create_magic_ball(flecs::world& ecs, const Position& start_pos, const Position& end_pos, const Color& color)
+{
+    flecs::entity textureSrc = ecs.entity("magic_ball_tex");
+    ecs.entity()
+        .set(MagicBall{ start_pos, end_pos, 0 })
+        .set(color)
+        .add<TextureSource>(textureSrc);
 }
 
 static void create_powerup(flecs::world &ecs, int x, int y, float amount)
@@ -191,6 +295,7 @@ static void register_roguelike_systems(flecs::world &ecs)
       bool right = IsKeyDown(KEY_RIGHT);
       bool up = IsKeyDown(KEY_UP);
       bool down = IsKeyDown(KEY_DOWN);
+      bool explore = IsKeyDown(KEY_ENTER);
       if (left && !inp.left)
         a.action = EA_MOVE_LEFT;
       if (right && !inp.right)
@@ -199,10 +304,13 @@ static void register_roguelike_systems(flecs::world &ecs)
         a.action = EA_MOVE_UP;
       if (down && !inp.down)
         a.action = EA_MOVE_DOWN;
+      if (explore && !inp.explore)
+          a.action = EA_EXPLORE;
       inp.left = left;
       inp.right = right;
       inp.up = up;
       inp.down = down;
+      inp.explore = explore;
 
       bool pass = IsKeyDown(KEY_SPACE);
       if (pass && !inp.passed)
@@ -297,8 +405,39 @@ static void register_roguelike_systems(flecs::world &ecs)
           }
       });
     });
-}
+  ecs.system<MagicBall, const Color>()
+      .with<TextureSource>(flecs::Wildcard)
+      .each([&](flecs::entity e, MagicBall& ball, const Color& color) {
+      if (ball.t >= 1.0f) {
+          e.destruct();
+      }
+      else {
+          ball.t = std::min(1.0f, ball.t + ecs.delta_time() * 5.f);
+          float pos_x = (1 - ball.t) * ball.startPosition.x + ball.t * ball.endPosition.x;
+          float pos_y = (1 - ball.t) * ball.startPosition.y + ball.t * ball.endPosition.y;
 
+          const auto textureSrc = e.target<TextureSource>();
+          DrawTextureQuad(*textureSrc.get<Texture2D>(),
+              Vector2{ 1, 1 }, Vector2{ 0, 0 },
+              Rectangle{ float(pos_x) * tile_size, float(pos_y) * tile_size, tile_size, tile_size }, color);
+      }
+          });
+
+  ecs.system<const DungeonVisibility>()
+      .each([&](flecs::entity e, const DungeonVisibility& dungeonVisibility)
+          {
+              const auto textureSrc = ecs.entity("floor_tex");
+              for (int i = 0; i < dungeonVisibility.height; ++i) {
+                  for (int j = 0; j < dungeonVisibility.width; ++j) {
+                      if (!dungeonVisibility.tiles[i * dungeonVisibility.width + j]) {
+                          DrawTextureQuad(*textureSrc.get<Texture2D>(),
+                              Vector2{ 1, 1 }, Vector2{ 0, 0 },
+                              Rectangle{ float(j) * tile_size, float(i) * tile_size, tile_size, tile_size }, Color{ 100, 100, 100, 255 });
+                      }
+                  }
+              }
+          });
+}
 
 void init_roguelike(flecs::world &ecs)
 {
@@ -308,6 +447,10 @@ void init_roguelike(flecs::world &ecs)
     .set(Texture2D{LoadTexture("assets/swordsman.png")});
   ecs.entity("minotaur_tex")
     .set(Texture2D{LoadTexture("assets/minotaur.png")});
+  ecs.entity("magic_ball_tex")
+      .set(Texture2D{ LoadTexture("assets/pew.png") });
+  ecs.entity("wizard_tex")
+      .set(Texture2D{ LoadTexture("assets/wizard.png") });
 
   ecs.observer<Texture2D>()
     .event(flecs::OnRemove)
@@ -316,10 +459,15 @@ void init_roguelike(flecs::world &ecs)
         UnloadTexture(texture);
       });
 
-  create_hive_monster(create_monster(ecs, Color{0xee, 0x00, 0xee, 0xff}, "minotaur_tex"));
-  create_hive_monster(create_monster(ecs, Color{0xee, 0x00, 0xee, 0xff}, "minotaur_tex"));
-  create_hive_monster(create_monster(ecs, Color{0x11, 0x11, 0x11, 0xff}, "minotaur_tex"));
-  create_hive(create_player_fleer(create_monster(ecs, Color{0, 255, 0, 255}, "minotaur_tex")));
+  for (int i = 0; i < 3; ++i) {
+      create_blue_spawner(ecs);
+      create_red_spawner(ecs);
+  }
+  create_player(ecs, "swordsman_tex");
+
+  ecs.entity("dungeon").insert([&](DungeonVisibility& dv) {
+      reveal_visibility(ecs, *ecs.entity("player").get<Position>(), dv);
+      });
 
   create_player(ecs, "swordsman_tex");
 
@@ -340,8 +488,19 @@ void init_dungeon(flecs::world &ecs, char *tiles, size_t w, size_t h)
   for (size_t y = 0; y < h; ++y)
     for (size_t x = 0; x < w; ++x)
       dungeonData[y * w + x] = tiles[y * w + x];
+  std::vector<bool> dungeonVisibility;
+  dungeonVisibility.resize(w * h);
+  for (size_t y = 0; y < h; ++y)
+      for (size_t x = 0; x < w; ++x)
+          if (dungeonData[y * w + x] == dungeon::floor) {
+              dungeonVisibility[y * w + x] = false;
+          }
+          else {
+              dungeonVisibility[y * w + x] = true;
+          }
   ecs.entity("dungeon")
-    .set(DungeonData{dungeonData, w, h});
+      .set(DungeonData{dungeonData, w, h })
+      .set(DungeonVisibility{dungeonVisibility, w, h });
 
   for (size_t y = 0; y < h; ++y)
     for (size_t x = 0; x < w; ++x)
@@ -406,14 +565,107 @@ static void push_to_log(flecs::world &ecs, const char *msg)
   });
 }
 
+static Action playerExplore(flecs::world& ecs) {
+    static auto playerExploreQuery = ecs.query<const IsPlayer, const Position>();
+    float moveWeights[EA_MOVE_END];
+    for (size_t i = 0; i < EA_MOVE_END; ++i)
+        moveWeights[i] = 0.f;
+
+    auto get_dmap_at = [&](const DijkstraMapData& dmap, const DungeonData& dd, size_t x, size_t y, float mult, float pow)
+        {
+            const float v = dmap.map[y * dd.width + x];
+            if (v < 1e5f)
+                return powf(v * mult, pow);
+            return v;
+        };
+
+    ecs.each([&](const DungeonData& dd) {
+        ecs.entity("explore_map").get([&](const DijkstraMapData& dmap) {
+            playerExploreQuery.each([&](const IsPlayer&, const Position& pos) {
+                moveWeights[EA_NOP] = get_dmap_at(dmap, dd, pos.x + 0, pos.y + 0, 1, 1);
+                moveWeights[EA_MOVE_LEFT] = get_dmap_at(dmap, dd, pos.x - 1, pos.y + 0, 1, 1);
+                moveWeights[EA_MOVE_RIGHT] = get_dmap_at(dmap, dd, pos.x + 1, pos.y + 0, 1, 1);
+                moveWeights[EA_MOVE_UP] = get_dmap_at(dmap, dd, pos.x + 0, pos.y - 1, 1, 1);
+                moveWeights[EA_MOVE_DOWN] = get_dmap_at(dmap, dd, pos.x + 0, pos.y + 1, 1, 1);
+                });
+            });
+        });
+
+    Action act;
+    float minWt = moveWeights[EA_NOP];
+    for (size_t i = 0; i < EA_MOVE_END; ++i)
+        if (moveWeights[i] < minWt)
+        {
+            minWt = moveWeights[i];
+            act.action = i;
+        }
+    return act;
+}
+
 static void process_actions(flecs::world &ecs)
 {
   static auto processActions = ecs.query<Action, Position, MovePos, const MeleeDamage, const Team>();
   static auto processHeals = ecs.query<Action, Hitpoints>();
   static auto checkAttacks = ecs.query<const MovePos, Hitpoints, const Team>();
+  static auto findMonstersQuery = ecs.query<const Position, const Hitpoints, const Team>();
+  static auto processSpawn = ecs.query<const Team, Spawner, const Position>();
+  static auto magicAttacks = ecs.query<MagicAttack, Action, const Position, const Team>();
+  static auto processMagicBalls = ecs.query<MagicBall>();
+  static auto dungeonVisibilityQuery = ecs.query<DungeonVisibility>();
   // Process all actions
   ecs.defer([&]
   {
+          magicAttacks.each([&](MagicAttack& attack, Action& a, const Position& pos, const Team& team) {
+              if (a.action == EA_ATTACK_MAGIC && attack.target.is_valid()) {
+                  attack.target.insert([&](Hitpoints& hp, const Position& target_pos) {
+                      hp.hitpoints -= attack.damage;
+                      create_magic_ball(ecs, pos, target_pos, team.team == 1 ? Color{ 0, 0, 255, 255 } : Color{ 255, 0, 0, 255 });
+                      });
+                  a.action = EA_NOP;
+              }
+              });
+
+          processSpawn.each([&](const Team& team, Spawner& spawner, const Position& pos)
+              {
+                  if (spawner.curSteps == 0) {
+                      bool canSpawn = true;
+                      int numBlue = 0;
+                      int numRed = 0;
+                      findMonstersQuery.each([&](const Position& p, const Hitpoints&, const Team& team)
+                          {
+                              if (p == pos)
+                                  canSpawn = false;
+                              if (team.team == 1) {
+                                  numBlue += 1;
+                              }
+                              else if (team.team == 2) {
+                                  numRed += 1;
+                              }
+                          });
+
+                      if (canSpawn) {
+                          if (team.team == 1 && numBlue <= spawner.maxUnits) {
+                              const int randomNumber = rand() % 2;
+                              if (randomNumber == 0) {
+                                  create_blue_melee(create_monster(ecs, {}, "minotaur_tex", pos));
+                              }
+                              else {
+                                  create_blue_wizard(create_monster(ecs, {}, "wizard_tex", pos));
+                              }
+                          }
+                          else if (team.team == 2 && numRed <= spawner.maxUnits) {
+                              const int randomNumber = rand() % 2;
+                              if (randomNumber == 0) {
+                                  create_red_melee(create_monster(ecs, {}, "minotaur_tex", pos));
+                              }
+                              else {
+                                  create_red_wizard(create_monster(ecs, {}, "wizard_tex", pos));
+                              }
+                          }
+                      }
+                  }
+                  spawner.curSteps = (spawner.curSteps + 1) % spawner.numSteps;
+              });
     processHeals.each([&](Action &a, Hitpoints &hp)
     {
       if (a.action != EA_HEAL_SELF)
@@ -425,6 +677,11 @@ static void process_actions(flecs::world &ecs)
     });
     processActions.each([&](flecs::entity entity, Action &a, Position &pos, MovePos &mpos, const MeleeDamage &dmg, const Team &team)
     {
+            if (entity.has<IsPlayer>()) {
+                if (a.action == EA_EXPLORE) {
+                    a = playerExplore(ecs);
+                }
+            }
       Position nextPos = move_pos(pos, a.action);
       bool blocked = !dungeon::is_tile_walkable(ecs, nextPos);
       checkAttacks.each([&](flecs::entity enemy, const MovePos &epos, Hitpoints &hp, const Team &enemy_team)
@@ -445,8 +702,13 @@ static void process_actions(flecs::world &ecs)
         mpos = nextPos;
     });
     // now move
-    processActions.each([&](Action &a, Position &pos, MovePos &mpos, const MeleeDamage &, const Team&)
+    processActions.each([&](flecs::entity entity, Action& a, Position& pos, MovePos& mpos, const MeleeDamage&, const Team&)
     {
+            if (entity.has<IsPlayer>()) {
+                dungeonVisibilityQuery.each([&](DungeonVisibility& dv) {
+                    reveal_visibility(ecs, Position{ mpos.x, mpos.y }, dv);
+                    });
+            }
       pos = mpos;
       a.action = EA_NOP;
     });
@@ -541,6 +803,7 @@ void process_turn(flecs::world &ecs)
       gather_world_info(ecs);
       ecs.defer([&]
       {
+              process_dmap_followers(ecs);
         stateMachineAct.each([&](flecs::entity e, StateMachine &sm)
         {
           sm.act(0.f, ecs, e);
@@ -549,7 +812,6 @@ void process_turn(flecs::world &ecs)
         {
           bt.update(ecs, e, bb);
         });
-        process_dmap_followers(ecs);
       });
       turnIncrementer.each([](TurnCounter &tc) { tc.count++; });
     }
@@ -569,6 +831,31 @@ void process_turn(flecs::world &ecs)
     dmaps::gen_hive_pack_map(ecs, hiveMap);
     ecs.entity("hive_map")
       .set(DijkstraMapData{hiveMap});
+
+    std::vector<float> blueMeleeAttackMap;
+    dmaps::gen_melee_attack_map(ecs, { 1 }, blueMeleeAttackMap);
+    ecs.entity("blue_melee_attack_map")
+        .set(DijkstraMapData{ blueMeleeAttackMap });
+
+    std::vector<float> redMeleeAttackMap;
+    dmaps::gen_melee_attack_map(ecs, { 2 }, redMeleeAttackMap);
+    ecs.entity("red_melee_attack_map")
+        .set(DijkstraMapData{ redMeleeAttackMap });
+
+    std::vector<float> blueWizardAttackMap;
+    dmaps::gen_wizard_attack_map(ecs, { 1 }, blueWizardAttackMap);
+    ecs.entity("blue_wizard_attack_map")
+        .set(DijkstraMapData{ blueWizardAttackMap });
+
+    std::vector<float> redWizardAttackMap;
+    dmaps::gen_wizard_attack_map(ecs, { 2 }, redWizardAttackMap);
+    ecs.entity("red_wizard_attack_map")
+        .set(DijkstraMapData{ redWizardAttackMap });
+
+    std::vector<float> exploreMap;
+    dmaps::gen_explore_map(ecs, exploreMap);
+    ecs.entity("explore_map")
+        .set(DijkstraMapData{ exploreMap });
 
     //ecs.entity("flee_map").add<VisualiseMap>();
     ecs.entity("hive_follower_sum")

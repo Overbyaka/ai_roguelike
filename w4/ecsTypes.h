@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <flecs.h>
 
 // TODO: make a lot of seprate files
 struct Position;
@@ -61,6 +62,19 @@ struct Hitpoints
   float hitpoints = 10.f;
 };
 
+struct MagicAttack
+{
+    flecs::entity target = flecs::entity::null();
+    int damage = 10;
+};
+
+struct MagicBall
+{
+    Position startPosition;
+    Position endPosition;
+    float t = 0;
+};
+
 enum Actions
 {
   EA_NOP = 0,
@@ -70,7 +84,8 @@ enum Actions
   EA_MOVE_DOWN,
   EA_MOVE_UP,
   EA_MOVE_END,
-  EA_ATTACK = EA_MOVE_END,
+  EA_ATTACK_MAGIC,
+  EA_EXPLORE,
   EA_HEAL_SELF,
   EA_PASS,
   EA_NUM
@@ -109,6 +124,7 @@ struct PlayerInput
   bool up = false;
   bool down = false;
   bool passed = false;
+  bool explore = false;
 };
 
 struct Symbol
@@ -117,6 +133,12 @@ struct Symbol
 };
 
 struct IsPlayer {};
+
+struct Spawner {
+    int numSteps = 2;
+    int curSteps = 0;
+    int maxUnits = 10;
+};
 
 struct WorldInfoGatherer {};
 
@@ -145,6 +167,13 @@ struct DungeonData
   std::vector<char> tiles; // for pathfinding
   size_t width;
   size_t height;
+};
+
+struct DungeonVisibility
+{
+    std::vector<bool> tiles;
+    size_t width;
+    size_t height;
 };
 
 struct DijkstraMapData

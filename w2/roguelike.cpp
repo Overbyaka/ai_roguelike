@@ -4,7 +4,7 @@
 #include "stateMachine.h"
 #include "aiLibrary.h"
 #include "blackboard.h"
-
+#include "math.h"
 
 static void create_minotaur_beh(flecs::entity e)
 {
@@ -25,6 +25,41 @@ static void create_minotaur_beh(flecs::entity e)
   e.set(BehaviourTree{root});
 }
 
+static void create_collector_beh(flecs::entity e)
+{
+    e.set(Collector{ 0, 20.f });
+    e.set(Blackboard{});
+    BehNode* root =
+        selector({
+          sequence({
+            findHealOrPowerup(e, 10.f, "target_item"),
+            move_to_entity(e, "target_item")
+          }),
+          sequence({
+            moveToSpawnPosition(e, "spawn_pos"),
+            collectorSpawn()
+          })
+            });
+    e.set(BehaviourTree{ root });
+}
+
+static void create_guard_beh(flecs::entity e, flecs::entity startWaypointEntity)
+{
+    e.set(Blackboard{});
+    BehNode* root =
+        selector({
+           sequence({
+            find_enemy(e, 4.f, "target_enemy"),
+            move_to_entity(e, "target_enemy")
+          }),
+          sequence({
+            move_to_entity(e, "next_waypoint"),
+            find_next_waypoint(e, startWaypointEntity, "next_waypoint"),
+          })
+            });
+    e.set(BehaviourTree{ root });
+}
+
 static flecs::entity create_monster(flecs::world &ecs, int x, int y, Color col, const char *texture_src)
 {
   flecs::entity textureSrc = ecs.entity(texture_src);
@@ -40,6 +75,23 @@ static flecs::entity create_monster(flecs::world &ecs, int x, int y, Color col, 
     .set(NumActions{1, 0})
     .set(MeleeDamage{20.f})
     .set(Blackboard{});
+}
+
+static flecs::entity create_neutral(flecs::world& ecs, int x, int y, Color col, const char* texture_src)
+{
+    flecs::entity textureSrc = ecs.entity(texture_src);
+    return ecs.entity()
+        .set(Position{ x, y })
+        .set(MovePos{ x, y })
+        .set(Hitpoints{ 100.f })
+        .set(Action{ EA_NOP })
+        .set(Color{ col })
+        .add<TextureSource>(textureSrc)
+        .set(StateMachine{})
+        .set(Team{ 0 })
+        .set(NumActions{ 1, 0 })
+        .set(MeleeDamage{ 20.f })
+        .set(Blackboard{});
 }
 
 static void create_player(flecs::world &ecs, int x, int y, const char *texture_src)
@@ -74,6 +126,13 @@ static void create_powerup(flecs::world &ecs, int x, int y, float amount)
     .set(Position{x, y})
     .set(PowerupAmount{amount})
     .set(Color{0xff, 0xff, 0x00, 0xff});
+}
+
+static flecs::entity  create_waypoint(flecs::world& ecs, int x, int y, flecs::entity nextWaypoint)
+{
+    return ecs.entity()
+        .set(Position{ x, y })
+        .set(Waypoint{ nextWaypoint });
 }
 
 static void register_roguelike_systems(flecs::world &ecs)
@@ -133,10 +192,13 @@ void init_roguelike(flecs::world &ecs)
         UnloadTexture(texture);
       });
 
-  create_minotaur_beh(create_monster(ecs, 5, 5, Color{0xee, 0x00, 0xee, 0xff}, "minotaur_tex"));
-  create_minotaur_beh(create_monster(ecs, 10, -5, Color{0xee, 0x00, 0xee, 0xff}, "minotaur_tex"));
-  create_minotaur_beh(create_monster(ecs, -5, -5, Color{0x11, 0x11, 0x11, 0xff}, "minotaur_tex"));
-  create_minotaur_beh(create_monster(ecs, -5, 5, Color{0, 255, 0, 255}, "minotaur_tex"));
+  create_collector_beh(create_neutral(ecs, 5, -2, Color{ 0xee, 0x00, 0xee, 0xff }, "minotaur_tex"));
+
+  flecs::entity wp1 = create_waypoint(ecs, -5, 0, flecs::entity::null());
+  flecs::entity wp2 = create_waypoint(ecs, 5, 0, wp1);
+  wp1.set<Waypoint>({ wp2 });
+
+  create_guard_beh(create_monster(ecs, -10, 0, Color{ 0, 0, 0, 0xff }, "minotaur_tex"), wp1);
 
   create_player(ecs, 0, 0, "swordsman_tex");
 
@@ -188,6 +250,7 @@ static void process_actions(flecs::world &ecs)
 {
   static auto processActions = ecs.query<Action, Position, MovePos, const MeleeDamage, const Team>();
   static auto checkAttacks = ecs.query<const MovePos, Hitpoints, const Team>();
+  static auto doCollectorsSpawns = ecs.query<Collector, const Position, Action>();
   // Process all actions
   ecs.defer([&]
   {
@@ -209,6 +272,30 @@ static void process_actions(flecs::world &ecs)
       else
         mpos = nextPos;
     });
+    doCollectorsSpawns.each([&](Collector& collector, const Position& pos, Action& a) {
+        if (a.action == EA_COLLECTOR_SPAWN) {
+            for (int32_t i = 0; i < collector.healsAndPowerupsCollected * 2; ++i) {
+                float dist = (static_cast<float>(rand()) / RAND_MAX) * collector.spawnRadius;
+                float angle = static_cast<float>(rand());
+
+                float randPointX = std::cos(angle) * dist;
+                float randPointY = std::sin(angle) * dist;
+
+                // to keep radius <= spawnRadius when cast to int
+                int intRandPointX = pos.x < randPointX ? std::floor(randPointX) : std::ceil(randPointX);
+                int intRandPointY = pos.y < randPointY ? std::floor(randPointY) : std::ceil(randPointY);
+
+                if (rand() % 2 == 0) {
+                    create_powerup(ecs, intRandPointX, intRandPointY, 10.f);
+                }
+                else {
+                    create_heal(ecs, intRandPointX, intRandPointY, 50.f);
+                }
+            }
+            collector.healsAndPowerupsCollected = 0;
+            a.action = EA_NOP;
+        }
+        });
     // now move
     processActions.each([&](Action &a, Position &pos, MovePos &mpos, const MeleeDamage &, const Team&)
     {
@@ -228,6 +315,7 @@ static void process_actions(flecs::world &ecs)
   });
 
   static auto playerPickup = ecs.query<const IsPlayer, const Position, Hitpoints, MeleeDamage>();
+  static auto collectorPickup = ecs.query<Collector, const Position, Hitpoints, MeleeDamage>();
   static auto healPickup = ecs.query<const Position, const HealAmount>();
   static auto powerupPickup = ecs.query<const Position, const PowerupAmount>();
   ecs.defer([&]
@@ -251,6 +339,27 @@ static void process_actions(flecs::world &ecs)
         }
       });
     });
+    collectorPickup.each([&](Collector& collector, const Position& pos, Hitpoints& hp, MeleeDamage& dmg)
+        {
+            healPickup.each([&](flecs::entity entity, const Position& ppos, const HealAmount& amt)
+                {
+                    if (pos == ppos)
+                    {
+                        hp.hitpoints += amt.amount;
+                        collector.healsAndPowerupsCollected += 1;
+                        entity.destruct();
+                    }
+                });
+            powerupPickup.each([&](flecs::entity entity, const Position& ppos, const PowerupAmount& amt)
+                {
+                    if (pos == ppos)
+                    {
+                        dmg.damage += amt.amount;
+                        collector.healsAndPowerupsCollected += 1;
+                        entity.destruct();
+                    }
+                });
+        });
   });
 }
 

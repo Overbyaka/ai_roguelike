@@ -41,6 +41,8 @@ int main(int argc, const char **argv)
   camera.rotation = 0.f;
   camera.zoom = 64.f;
 
+  SetTraceLogLevel(LOG_ALL);
+
   SetTargetFPS(60);               // Set our game to run at 60 frames-per-second
   while (!WindowShouldClose())
   {
